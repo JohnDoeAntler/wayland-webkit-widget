@@ -1,0 +1,28 @@
+[package]
+name = "wayland-webkit-widget"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# parse command line arguments
+clap = { version = "4.4.7", features = ["derive"] }
+# daemonize the process
+daemonize = "0.5.0"
+# serialize and deserialize json files
+serde_json = "1.0.107"
+serde = { version = "1.0.190", features = ["derive"] }
+# webserver
+actix-files = "0.6.2"
+actix-web = "4.4.0"
+# gtk stuff
+gtk = "0.18.1"
+gtk-layer-shell = "0.8.0"
+webkit2gtk = { version = "=2.0", features = [ "v2_38" ] }
+webkit2gtk-sys = "=2.0"
+gio = "0.18.2"
+gdk = "0.18.0"
+glib = "0.18.3"
+async-channel = "2.1.0"
+tokio = { version = "1.35.0", features = ["sync", "full"] }
