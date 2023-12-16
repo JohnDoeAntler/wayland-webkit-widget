@@ -1,11 +1,9 @@
 use crate::http_server::start_web_server;
+use crate::utils::read_socket_response;
 use crate::widget::{start_widget_application, WidgetChannelMessage};
 use crate::{constants::SOCKET_PATH, utils::write_socket_message, Commands};
-
 use actix_web::dev::ServerHandle;
 use actix_web::rt;
-
-use crate::utils::read_socket_response;
 use async_channel;
 use daemonize::Daemonize;
 use std::{fs::File, os::unix::net::UnixListener};
@@ -35,7 +33,7 @@ impl Daemon {
 
         // init widget application
         let (widget_channel_sender, receiver) = async_channel::unbounded();
-        start_widget_application(receiver.clone());
+        start_widget_application(receiver);
 
         // init web server
         let server_handle = start_web_server();
@@ -78,8 +76,10 @@ impl Daemon {
                 _ => {
                     println!("received message: {:?}", command);
                     let sender = &self.widget_channel_sender;
-                    sender.send_blocking(WidgetChannelMessage { stream, command }).unwrap();
-                    println!("sent message to widget thread");
+                    match sender.send_blocking(WidgetChannelMessage { stream, command }) {
+                        Ok(_) => println!("sent message to widget thread"),
+                        Err(e) => println!("error: {:?}", e),
+                    }
                 }
             }
         }

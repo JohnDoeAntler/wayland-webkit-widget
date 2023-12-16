@@ -1,23 +1,9 @@
 use gio::{prelude::*, ApplicationFlags};
-use gtk::Application;
-use std::{os::unix::net::UnixStream, thread};
-
-use glib::clone;
-use std::fmt::Formatter;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::mpsc;
-use gdk::cairo::RectangleInt;
-use gdk::cairo::Region;
-use gtk::{ApplicationWindow, gdk::Display};
-use gio::{prelude::*};
-// use gtk::prelude::{GtkWindowExt, WidgetExt, ContainerExt};
-use gtk::prelude::*;
-use gtk_layer_shell::{Edge, LayerShell};
-use webkit2gtk::WebViewExt;
-use webkit2gtk::WebView;
 use gtk::glib;
-use std::io::prelude::*;
+use gtk::prelude::*;
+use gtk::Application;
+use gtk::ApplicationWindow;
+use std::{os::unix::net::UnixStream, thread};
 
 use crate::{cli::Commands, utils::write_socket_message};
 
@@ -27,7 +13,7 @@ pub struct WidgetChannelMessage {
 }
 
 pub fn start_widget_application(receiver: async_channel::Receiver<WidgetChannelMessage>) {
-    thread::spawn(|| {
+    thread::spawn(move || {
         gtk::init().unwrap();
 
         let app = Application::new(
@@ -37,12 +23,13 @@ pub fn start_widget_application(receiver: async_channel::Receiver<WidgetChannelM
 
         app.connect_activate(move |app| {
             println!("app activated");
-            let receiver = receiver.clone();
-            glib::spawn_future_local(async move {
-                println!("widget thread started");
-                let ret = receiver.recv();
-                println!("preparing to receive message from daemon");
-                match ret.await {
+            // dummy window for always awaking the glib main loop
+            let _ = ApplicationWindow::new(app);
+        });
+
+        glib::spawn_future_local(async move {
+            loop {
+                match receiver.recv().await {
                     Ok(message) => {
                         let mut stream = message.stream;
                         let command = message.command;
@@ -52,7 +39,7 @@ pub fn start_widget_application(receiver: async_channel::Receiver<WidgetChannelM
                         println!("error: {:?}", e);
                     }
                 }
-            });
+            }
         });
 
         app.run_with_args::<&str>(&[]);

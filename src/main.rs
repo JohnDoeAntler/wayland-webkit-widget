@@ -1,17 +1,15 @@
 mod app;
 mod cli;
 mod constants;
-mod utils;
 mod http_server;
+mod utils;
 mod widget;
-
-use std::os::unix::net::UnixStream;
-
 use app::Daemon;
 use clap::Parser;
 use cli::{Cli, Commands};
 use constants::SOCKET_PATH;
 use serde_json;
+use std::os::unix::net::UnixStream;
 use utils::{read_socket_response, write_socket_message};
 
 fn main() {
