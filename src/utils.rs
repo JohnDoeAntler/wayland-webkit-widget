@@ -1,7 +1,7 @@
-use std::env;
-use std::path::Path;
-use async_std::io::{BufReader, WriteExt, prelude::BufReadExt};
+use async_std::io::{prelude::BufReadExt, BufReader, WriteExt};
 use async_std::os::unix::net::UnixStream;
+use std::env;
+use std::path::{Path, PathBuf};
 
 pub async fn write_socket_message(stream: &mut UnixStream, message: String) {
     let n = message.split("\n").count();
@@ -38,12 +38,9 @@ pub async fn read_socket_response(stream: &mut UnixStream) -> String {
     input
 }
 
-pub fn get_widget_dir_path() -> String {
+pub fn get_widget_dir_path() -> PathBuf {
     let default_config_path = format!("{}/.config", std::env::var("HOME").unwrap());
     let xdg_config_path = env::var("XDG_CONFIG_HOME").unwrap_or(default_config_path);
-    return Path::new(xdg_config_path.as_str())
-        .join("www")
-        .to_str()
-        .unwrap()
-        .to_string();
+
+    Path::new(xdg_config_path.as_str()).join("www")
 }
