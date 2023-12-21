@@ -22,7 +22,7 @@ pub enum Commands {
     },
     Manage {
         #[clap(short, long)]
-        id: Option<u32>,
+        id: Option<String>,
 
         #[clap(short, long)]
         directory: Option<String>,
@@ -40,6 +40,7 @@ pub enum Commands {
 pub enum ManageCommands {
     Delete,
     Update {},
+    // no effects to the metadata
     Reload,
     Show,
     Hide,
