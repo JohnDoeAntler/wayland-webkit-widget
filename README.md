@@ -1,43 +1,72 @@
-# mode1
+# Wayland Webkit Widget
 
-## main
+a widget system allows you using html, javascript and css to create something on your screen :3.
 
-- send command
+a youtube demonstration video in below:
 
-# mode2
+[![Thumbnail](http://i3.ytimg.com/vi/TyJTUVT9ZWs/maxresdefault.jpg)](https://www.youtube.com/watch?v=TyJTUVT9ZWs)
 
-## main
+# Usage
 
-- receive command
-- send command to webkit thread
+## Start daemon
 
-## web server
+```sh
+cargo run init
+```
 
-## webkit thread
+## Load config
 
-# steps
+```sh
+cargo run create
+   --directory <a path relative to ~/.config/www/> # lets say you have a index.html located at ~/.config/www/my-app/index.html, the path would be my-app
+   --monitor <the index of your monitor> # use cargo run version to obtain the information of the indices
+   --layer <overlay, top, bottom, background> # overlay will visble even when fullscreen
+   --anchors <top, right, bottom, left> # you need to specify anchors to show the application
+   --default-width <number>
+   --default-height <number>
+```
 
-1. run the daemon first by `www init`
+## Show widget
 
-   - it will create a web server
-   - it will create a gtk application
-   - it will listen the unix socket messages
+```sh
+cargo run show
+# --- your could show by id
+cargo run show --id ffffff
+# --- also by tags
+cargo run show --tags wallpaper
+# --- or by directory
+cargo run show --directory my-app
+```
 
-2. run the command `www create --directory path \
---monitor HDMI-0 \
---anchors top,right \
---margin-top 5 \
---margin-right 5 \
---layer bottom \
---exclusive-zone \
---default-width 100 \
---default-height 100 \
---click-though true \
---keyboard-mode false \
---tags bar
-`
-   return the id of the created widget instance
+## Hide widget
 
-3. run the command `www manage --id [id] reload` to reload the application
-4. run the command `www manage --id [id] update --monitor` to update parameters
-5. run the command `www manage --id [id] delete` to shutdown widget instance
+```sh
+cargo run hide
+   # --id <id>
+   # --directory <path>
+   # --tags <tag>
+```
+
+## Unload widget
+
+```sh
+cargo run delete
+   # --id <id>
+   # --directory <path>
+   # --tags <tag>
+```
+
+## Reload widget
+
+```sh
+cargo run reload
+   # --id <id>
+   # --directory <path>
+   # --tags <tag>
+```
+
+## Kill daemon
+
+```sh
+cargo run kill
+```
