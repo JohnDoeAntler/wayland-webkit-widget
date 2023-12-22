@@ -9,7 +9,7 @@ a youtube demonstration video in below:
 # Initiatives
 
 1. I want creating widget in HTML, CSS and JavaScript although it might be bloat. :3
-2. I want a larger eco-system I guess? (three.js, gsap... etc)
+2. I want a larger eco-system I guess? ([three.js](https://threejs.org/), [gsap](https://gsap.com/), [lottie](https://airbnb.design/lottie/)... etc)
 
 # Goals
 
