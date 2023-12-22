@@ -1,4 +1,3 @@
-mod app;
 mod cli;
 mod constants;
 mod http_server;
