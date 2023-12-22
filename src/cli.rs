@@ -1,6 +1,5 @@
-use clap::{Parser, Subcommand, Args};
-use gtk_layer_shell::Layer;
-use serde::{Serialize, Deserialize};
+use clap::{Args, Parser, Subcommand};
+use serde::{Deserialize, Serialize};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -9,9 +8,8 @@ pub struct Cli {
     pub command: Commands,
 }
 
-
-#[derive(Debug, Args, Serialize, Deserialize, Clone)]
-pub struct ManageCommandArgs {
+#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+pub struct QueryArgs {
     #[clap(short, long)]
     pub id: Option<String>,
 
@@ -22,7 +20,7 @@ pub struct ManageCommandArgs {
     pub tags: Option<Vec<String>>,
 }
 
-#[derive(Parser, Debug, Serialize, Deserialize, Clone)]
+#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
 pub struct WidgetMargins {
     #[clap(long = "margin-top")]
     pub top: Option<i32>,
@@ -37,7 +35,7 @@ pub struct WidgetMargins {
     pub left: Option<i32>,
 }
 
-#[derive(Parser, Debug, Serialize, Deserialize, Clone)]
+#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
 pub struct WidgetDefaultSize {
     #[clap(long = "default-width")]
     pub width: Option<i32>,
@@ -46,13 +44,13 @@ pub struct WidgetDefaultSize {
     pub height: Option<i32>,
 }
 
-#[derive(Debug, Args, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize)]
 pub struct WidgetMetadataArgs {
     #[clap(short, long)]
-    pub monitor: i32,
+    pub monitor: Option<i32>,
 
     #[clap(short, long)]
-    pub layer: String,
+    pub layer: Option<String>,
 
     #[clap(short, long)]
     pub anchors: Vec<String>,
@@ -62,6 +60,15 @@ pub struct WidgetMetadataArgs {
 
     #[clap(flatten)]
     pub size: WidgetDefaultSize,
+
+    #[clap(short, long, default_value = "false")]
+    pub click_through: bool,
+
+    #[clap(short, long, default_value = "false")]
+    pub exclusive: bool,
+
+    #[clap(short, long = "keyboard-interactivity", default_value = "false")]
+    pub keyboard_interactivity: bool,
 }
 
 #[derive(Subcommand, Debug, Serialize, Deserialize)]
@@ -74,37 +81,37 @@ pub enum Commands {
         directory: String,
 
         #[clap(short, long)]
-        tags: Option<Vec<String>>,
+        tags: Vec<String>,
 
         #[clap(flatten)]
         metadata: WidgetMetadataArgs,
     },
     Delete {
         #[clap(flatten)]
-        query: ManageCommandArgs,
+        query: QueryArgs,
     },
     Update {
         #[clap(flatten)]
-        query: ManageCommandArgs,
+        query: QueryArgs,
 
         #[clap(flatten)]
         metadata: WidgetMetadataArgs,
     },
     Reload {
         #[clap(flatten)]
-        query: ManageCommandArgs,
+        query: QueryArgs,
     },
     Show {
         #[clap(flatten)]
-        query: ManageCommandArgs,
+        query: QueryArgs,
     },
     Hide {
         #[clap(flatten)]
-        query: ManageCommandArgs,
+        query: QueryArgs,
     },
     List {
         #[clap(flatten)]
-        query: ManageCommandArgs,
+        query: QueryArgs,
     },
     Version,
 }

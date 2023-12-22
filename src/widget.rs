@@ -1,6 +1,6 @@
-use crate::cli::{ManageCommandArgs, WidgetMetadataArgs};
+use crate::cli::{QueryArgs, WidgetMetadataArgs, WidgetDefaultSize, WidgetMargins};
 use crate::constants::SOCKET_PATH;
-use crate::utils::{get_widget_dir_path, read_socket_response};
+use crate::utils::read_socket_response;
 use crate::{cli::Commands, utils::write_socket_message};
 use async_std::os::unix::net::UnixListener;
 use gdk::Display;
@@ -37,18 +37,91 @@ fn create_window(app: &Application) -> ApplicationWindow {
     window
 }
 
+fn inject_javascript_to_webview(webview: &WebView, data: &Widget) {
+    let template = r#"
+        window.www = {};
+        window.www.id = "{{id}}";
+    "#
+    .replace("{{id}}", data.id.as_str());
+
+    webview.run_javascript(template.as_str(), gio::Cancellable::NONE, |e| {});
+}
+
 fn create_webview(url: String) -> WebView {
     let webview = WebView::new();
 
     webview.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
     webview.load_uri(url.as_str());
-    webview.run_javascript_future("window.monitor = 1");
 
     webview
 }
 
 fn apply_layer_shell(window: &ApplicationWindow) {
     window.init_layer_shell();
+}
+
+fn update_monitor(window: &ApplicationWindow, monitor: &Option<i32>) {
+    if let Some(monitor) = *monitor {
+        let display = &Display::default().expect("failed to get display");
+        let target_monitor = std::cmp::max(std::cmp::min(monitor, 0), display.n_monitors() - 1);
+        window.set_monitor(display.monitor(target_monitor).unwrap().as_ref());
+    }
+}
+
+fn update_layer(window: &ApplicationWindow, layer: &Option<String>) {
+    if let Some(layer) = layer {
+        window.set_layer(match layer.as_str() {
+            "background" => Layer::Background,
+            "bottom" => Layer::Bottom,
+            "top" => Layer::Top,
+            "overlay" => Layer::Overlay,
+            _ => Layer::Top,
+        });
+    }
+}
+
+fn update_margins(window: &ApplicationWindow, margins: &WidgetMargins) {
+    if let Some(top) = margins.left {
+        window.set_layer_shell_margin(Edge::Top, top)
+    }
+    if let Some(right) = margins.right {
+        window.set_layer_shell_margin(Edge::Right, right)
+    }
+    if let Some(bottom) = margins.bottom {
+        window.set_layer_shell_margin(Edge::Bottom, bottom)
+    }
+    if let Some(left) = margins.left {
+        window.set_layer_shell_margin(Edge::Left, left)
+    }
+}
+
+fn update_anchors(window: &ApplicationWindow, anchors: &Vec<String>) {
+    [Edge::Top, Edge::Right, Edge::Bottom, Edge::Left]
+        .iter()
+        .for_each(|e| window.set_anchor(*e, false));
+
+    anchors.iter().for_each(|a| {
+        window.set_anchor(
+            match a.as_str() {
+                "top" => Edge::Top,
+                "right" => Edge::Right,
+                "bottom" => Edge::Bottom,
+                "left" => Edge::Left,
+                _ => Edge::Top,
+            },
+            true,
+        );
+    });
+}
+
+fn update_size(window: &ApplicationWindow, size: &WidgetDefaultSize) {
+    if let Some(width) = size.width {
+        window.set_width_request(width);
+    }
+
+    if let Some(height) = size.height {
+        window.set_height_request(height);
+    }
 }
 
 impl Widget {
@@ -70,48 +143,15 @@ impl Widget {
 
     fn update(&self, metadata: WidgetMetadataArgs) {
         println!("metadata: {:?}", metadata);
-
-        // update monitor
-        let display = &Display::default().expect("failed to get display");
-        let target_monitor =
-            std::cmp::max(std::cmp::min(metadata.monitor, 0), display.n_monitors() - 1);
-
-        self.window.set_monitor(display.monitor(target_monitor).unwrap().as_ref());
-
-        // update layer
-        self.window.set_layer(match metadata.layer.as_str() {
-            "background" => Layer::Background,
-            "bottom" => Layer::Bottom,
-            "top" => Layer::Top,
-            "overlay" => Layer::Overlay,
-            _ => Layer::Top,
-        });
-
-        // update anchors
-        metadata.anchors.iter().for_each(|a| {
-            self.window.set_anchor(
-                match a.as_str() {
-                    "top" => Edge::Top,
-                    "right" => Edge::Right,
-                    "bottom" => Edge::Bottom,
-                    "left" => Edge::Left,
-                    _ => Edge::Top,
-                },
-                true,
-            );
-        });
-
-        // update default size
-        if let Some(width) = metadata.size.width {
-            self.window.set_width_request(width);
-        }
-
-        if let Some(height) = metadata.size.height {
-            self.window.set_height_request(height);
-        }
+        update_monitor(&self.window, &metadata.monitor);
+        update_layer(&self.window, &metadata.layer);
+        update_margins(&self.window, &metadata.margins);
+        update_anchors(&self.window, &metadata.anchors);
+        update_size(&self.window, &metadata.size);
+        inject_javascript_to_webview(&self.webview, &self);
     }
 
-    fn new(app: &Application, directory: String, tags: Option<Vec<String>>) -> Self {
+    fn new(app: &Application, directory: String, tags: Vec<String>) -> Self {
         let window = create_window(app);
         let webview_url = format!(
             "http://localhost:8082/{}",
@@ -122,15 +162,13 @@ impl Widget {
                 .to_string()
         );
 
-        println!("webview url: {}", webview_url);
-
         let webview = create_webview(webview_url);
         window.add(&webview);
         apply_layer_shell(&window);
 
         Self {
             id: Uuid::new_v4().to_string(),
-            tags: tags.unwrap_or(vec![]),
+            tags,
             directory,
             window,
             webview,
@@ -143,7 +181,7 @@ struct WidgetSet {
     widgets: Vec<Widget>,
 }
 
-fn query_widgets(w: &Vec<Widget>, query: ManageCommandArgs) -> Vec<&Widget> {
+fn query_widgets(w: &Vec<Widget>, query: QueryArgs) -> Vec<&Widget> {
     w.iter()
         .filter(|w| {
             (query.id.is_none() || query.id.as_ref().is_some_and(|e| w.id.contains(e)))
@@ -190,6 +228,15 @@ async fn listen_unix_socket(app: Application) {
                 tags,
                 metadata,
             } => {
+                if metadata.monitor.is_none() || metadata.layer.is_none() {
+                    write_socket_message(
+                        &mut stream,
+                        "monitor and layer are required".to_string(),
+                    )
+                    .await;
+                    continue;
+                }
+
                 let id = {
                     let widget = Widget::new(&app, directory, tags);
                     widget.update(metadata);
@@ -200,8 +247,18 @@ async fn listen_unix_socket(app: Application) {
                 };
                 write_socket_message(&mut stream, id).await;
             }
+            Commands::Update { query, metadata } => {
+                query_widgets(&config.widgets, query)
+                    .iter()
+                    .for_each(|w| w.update(metadata.to_owned()));
+                write_socket_message(&mut stream, "ok".to_string()).await;
+            }
             Commands::List { query } => {
-                write_socket_message(&mut stream, format!("{:#?}", config.widgets)).await;
+                write_socket_message(
+                    &mut stream,
+                    format!("{:#?}", query_widgets(&config.widgets, query)),
+                )
+                .await;
             }
             Commands::Show { query } => {
                 query_widgets(&config.widgets, query)
