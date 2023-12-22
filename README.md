@@ -6,6 +6,20 @@ a youtube demonstration video in below:
 
 [![Thumbnail](http://i3.ytimg.com/vi/TyJTUVT9ZWs/maxresdefault.jpg)](https://www.youtube.com/watch?v=TyJTUVT9ZWs)
 
+# Initiatives
+
+1. I want creating widget in HTML, CSS and JavaScript although it might be bloat. :3
+2. I want a larger eco-system I guess? (three.js, gsap... etc)
+
+# Goals
+
+- [x] able to show sth on screen :3
+- [x] put widget in background or always on top :3
+- [ ] enable click through & exclusive zone
+- [ ] allow webview calls system command
+- [ ] allow dispatch sth to specific webview
+- [ ] publish
+
 # Usage
 
 ## Start daemon
