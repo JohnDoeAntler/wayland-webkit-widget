@@ -96,6 +96,10 @@ fn update_margins(window: &ApplicationWindow, margins: &WidgetMargins) {
 }
 
 fn update_anchors(window: &ApplicationWindow, anchors: &Vec<String>) {
+    if anchors.is_empty() {
+        return;
+    }
+
     [Edge::Top, Edge::Right, Edge::Bottom, Edge::Left]
         .iter()
         .for_each(|e| window.set_anchor(*e, false));
