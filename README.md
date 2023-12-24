@@ -15,7 +15,7 @@ a youtube demonstration video in below:
 
 - [x] able to show sth on screen :3
 - [x] put widget in background or always on top :3
-- [ ] enable click through & exclusive zone
+- [x] enable click through & exclusive zone
 - [ ] allow webview calls system command
 - [ ] allow dispatching sth to specific webview via command line
 - [ ] publish
