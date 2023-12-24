@@ -3,10 +3,12 @@ mod constants;
 mod http_server;
 mod utils;
 mod widget;
+mod commands;
+
 use std::fs::File;
 
 use clap::Parser;
-use cli::{Cli, Commands};
+use cli::{Cli, CliCommands};
 use constants::SOCKET_PATH;
 use daemonize::Daemonize;
 use http_server::start_web_server;
@@ -40,7 +42,7 @@ fn main() {
 
     // if init, start daemon
     match &cli.command {
-        Commands::Init => {
+        CliCommands::Init => {
             // 1. daemonize
             daemonize_application();
 

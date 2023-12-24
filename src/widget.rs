@@ -1,28 +1,65 @@
-use crate::cli::{QueryArgs, WidgetMetadataArgs, WidgetDefaultSize, WidgetMargins};
+use crate::cli::{AppState, WidgetDefaultSize, WidgetMargins, WidgetMetadataArgs};
+use crate::commands::handler::CommandHandler;
 use crate::constants::SOCKET_PATH;
 use crate::utils::read_socket_response;
-use crate::{cli::Commands, utils::write_socket_message};
+use crate::{cli::CliCommands, utils::write_socket_message};
 use async_std::os::unix::net::UnixListener;
+use gdk::cairo::{RectangleInt, Region};
 use gdk::Display;
 use gio::{prelude::*, ApplicationFlags};
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::Application;
 use gtk::ApplicationWindow;
-use gtk_layer_shell::{Edge, Layer, LayerShell};
+use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use std::path::Path;
 use uuid::Uuid;
-use webkit2gtk::{WebView, WebViewExt};
+use webkit2gtk::{SettingsExt, WebView, WebViewExt};
 
 #[derive(Debug, PartialEq)]
-struct Widget {
-    id: String,
-    tags: Vec<String>,
-    directory: String,
+pub struct WidgetMetadataAnchors {
+    top: bool,
+    right: bool,
+    bottom: bool,
+    left: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct WidgetMetadataMargins {
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub left: i32,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct WidgetMetadataSize {
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct WidgetMetadata {
+    pub monitor: Option<i32>,
+    pub layer: Option<Layer>,
+    pub anchors: Option<WidgetMetadataAnchors>,
+    pub margins: Option<WidgetMetadataMargins>,
+    pub size: Option<WidgetMetadataSize>,
+    pub click_through: bool,
+    pub exclusive: bool,
+    pub keyboard_mode: Option<String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Widget {
+    pub id: String,
+    pub tags: Vec<String>,
+    pub directory: String,
 
     // gtk info
-    window: ApplicationWindow,
-    webview: WebView,
+    pub window: ApplicationWindow,
+    pub webview: WebView,
+    pub metadata: WidgetMetadata,
 }
 
 fn create_window(app: &Application) -> ApplicationWindow {
@@ -44,7 +81,13 @@ fn inject_javascript_to_webview(webview: &WebView, data: &Widget) {
     "#
     .replace("{{id}}", data.id.as_str());
 
-    webview.run_javascript(template.as_str(), gio::Cancellable::NONE, |e| {});
+    webview.run_javascript(template.as_str(), gio::Cancellable::NONE, |e| {
+        if let Ok(r) = e {
+            println!("javascript injected: {:?}", r.to_value());
+        } else if let Err(e) = e {
+            println!("error: {:?}", e);
+        }
+    });
 }
 
 fn create_webview(url: String) -> WebView {
@@ -60,44 +103,66 @@ fn apply_layer_shell(window: &ApplicationWindow) {
     window.init_layer_shell();
 }
 
-fn update_monitor(window: &ApplicationWindow, monitor: &Option<i32>) {
-    if let Some(monitor) = *monitor {
-        let display = &Display::default().expect("failed to get display");
-        let target_monitor = std::cmp::max(std::cmp::min(monitor, 0), display.n_monitors() - 1);
-        window.set_monitor(display.monitor(target_monitor).unwrap().as_ref());
+fn update_monitor(window: &ApplicationWindow, monitor: i32) -> i32 {
+    let display = &Display::default().expect("failed to get display");
+    let target_monitor = std::cmp::max(std::cmp::min(monitor, 0), display.n_monitors() - 1);
+    window.set_monitor(display.monitor(target_monitor).unwrap().as_ref());
+    target_monitor
+}
+
+fn update_layer(window: &ApplicationWindow, layer: String) -> Layer {
+    let layer = match layer.as_str() {
+        "background" => Layer::Background,
+        "bottom" => Layer::Bottom,
+        "top" => Layer::Top,
+        "overlay" => Layer::Overlay,
+        _ => Layer::Background,
+    };
+
+    window.set_layer(layer);
+
+    layer
+}
+
+fn update_margins(window: &ApplicationWindow, margins: &WidgetMargins) -> WidgetMetadataMargins {
+    WidgetMetadataMargins {
+        top: if let Some(top) = margins.top {
+            window.set_layer_shell_margin(Edge::Top, top);
+            top
+        } else {
+            0
+        },
+        right: if let Some(right) = margins.right {
+            window.set_layer_shell_margin(Edge::Right, right);
+            right
+        } else {
+            0
+        },
+        bottom: if let Some(bottom) = margins.bottom {
+            window.set_layer_shell_margin(Edge::Bottom, bottom);
+            bottom
+        } else {
+            0
+        },
+        left: if let Some(left) = margins.left {
+            window.set_layer_shell_margin(Edge::Left, left);
+            left
+        } else {
+            0
+        },
     }
 }
 
-fn update_layer(window: &ApplicationWindow, layer: &Option<String>) {
-    if let Some(layer) = layer {
-        window.set_layer(match layer.as_str() {
-            "background" => Layer::Background,
-            "bottom" => Layer::Bottom,
-            "top" => Layer::Top,
-            "overlay" => Layer::Overlay,
-            _ => Layer::Top,
-        });
-    }
-}
+fn update_anchors(window: &ApplicationWindow, anchors: &Vec<String>) -> WidgetMetadataAnchors {
+    let mut ret = WidgetMetadataAnchors {
+        top: false,
+        right: false,
+        bottom: false,
+        left: false,
+    };
 
-fn update_margins(window: &ApplicationWindow, margins: &WidgetMargins) {
-    if let Some(top) = margins.left {
-        window.set_layer_shell_margin(Edge::Top, top)
-    }
-    if let Some(right) = margins.right {
-        window.set_layer_shell_margin(Edge::Right, right)
-    }
-    if let Some(bottom) = margins.bottom {
-        window.set_layer_shell_margin(Edge::Bottom, bottom)
-    }
-    if let Some(left) = margins.left {
-        window.set_layer_shell_margin(Edge::Left, left)
-    }
-}
-
-fn update_anchors(window: &ApplicationWindow, anchors: &Vec<String>) {
     if anchors.is_empty() {
-        return;
+        return ret;
     }
 
     [Edge::Top, Edge::Right, Edge::Bottom, Edge::Left]
@@ -107,68 +172,149 @@ fn update_anchors(window: &ApplicationWindow, anchors: &Vec<String>) {
     anchors.iter().for_each(|a| {
         window.set_anchor(
             match a.as_str() {
-                "top" => Edge::Top,
-                "right" => Edge::Right,
-                "bottom" => Edge::Bottom,
-                "left" => Edge::Left,
-                _ => Edge::Top,
+                "top" => {
+                    ret.top = true;
+                    Edge::Top
+                }
+                "right" => {
+                    ret.right = true;
+                    Edge::Right
+                }
+                "bottom" => {
+                    ret.bottom = true;
+                    Edge::Bottom
+                }
+                "left" => {
+                    ret.left = true;
+                    Edge::Left
+                }
+                _ => {
+                    ret.top = true;
+                    Edge::Top
+                }
             },
             true,
         );
     });
+
+    ret
 }
 
-fn update_size(window: &ApplicationWindow, size: &WidgetDefaultSize) {
+fn update_size(window: &ApplicationWindow, size: &WidgetDefaultSize) -> WidgetMetadataSize {
+    let mut ret = WidgetMetadataSize {
+        width: -1,
+        height: -1,
+    };
+
     if let Some(width) = size.width {
         window.set_width_request(width);
+        ret.width = width;
     }
 
     if let Some(height) = size.height {
         window.set_height_request(height);
+        ret.height = height;
+    }
+
+    ret
+}
+
+fn update_click_through(window: &ApplicationWindow, click_through: bool) -> bool {
+    if click_through {
+        let rectangle_int = RectangleInt::new(0, 0, 0, 0);
+        let rectangle = Region::create_rectangle(&rectangle_int);
+        window.input_shape_combine_region(Some(&rectangle));
+        true
+    } else {
+        window.input_shape_combine_region(None);
+        false
     }
 }
 
+fn update_exclusive(window: &ApplicationWindow, exclusive: bool) -> bool {
+    if exclusive {
+        window.auto_exclusive_zone_enable();
+        true
+    } else {
+        window.set_exclusive_zone(0);
+        false
+    }
+}
+
+fn update_keyboard_mode(window: &ApplicationWindow, keyboard_mode: String) -> String {
+    // window.set_keyboard_interactivity(keyboard_interactivity);
+    match keyboard_mode.as_str() {
+        "none" => window.set_keyboard_mode(KeyboardMode::None),
+        "on-demand" => window.set_keyboard_mode(KeyboardMode::OnDemand),
+        "exclusive" => window.set_keyboard_mode(KeyboardMode::Exclusive),
+        _ => window.set_keyboard_mode(KeyboardMode::None),
+    }
+    keyboard_mode
+}
+
 impl Widget {
-    fn show(&self) {
+    pub fn show(&self) {
         self.window.show_all();
     }
 
-    fn hide(&self) {
+    pub fn hide(&self) {
         self.window.hide();
     }
 
-    fn close(&self) {
+    pub fn close(&self) {
         self.window.close();
     }
 
-    fn reload(&self) {
+    pub fn reload(&self) {
         self.webview.reload();
     }
 
-    fn update(&self, metadata: WidgetMetadataArgs) {
+    pub fn update(&mut self, metadata: WidgetMetadataArgs) {
         println!("metadata: {:?}", metadata);
-        update_monitor(&self.window, &metadata.monitor);
-        update_layer(&self.window, &metadata.layer);
-        update_margins(&self.window, &metadata.margins);
-        update_anchors(&self.window, &metadata.anchors);
-        update_size(&self.window, &metadata.size);
+        if let Some(monitor) = metadata.monitor {
+            self.metadata.monitor = Some(update_monitor(&self.window, monitor));
+        }
+        if let Some(layer) = metadata.layer {
+            self.metadata.layer = Some(update_layer(&self.window, layer));
+        }
+        if let Some(margins) = &metadata.margins {
+            self.metadata.margins = Some(update_margins(&self.window, margins));
+        }
+        if let Some(anchors) = &metadata.anchors {
+            self.metadata.anchors = Some(update_anchors(&self.window, anchors));
+        }
+        if let Some(size) = &metadata.size {
+            self.metadata.size = Some(update_size(&self.window, size));
+        }
+        if let Some(click_through) = metadata.click_through {
+            self.metadata.click_through = update_click_through(&self.window, click_through);
+        }
+        if let Some(exclusive) = metadata.exclusive {
+            self.metadata.click_through = update_exclusive(&self.window, exclusive);
+        }
+        if let Some(keyboard_mode) = metadata.keyboard_mode {
+            self.metadata.keyboard_mode = Some(update_keyboard_mode(&self.window, keyboard_mode));
+        }
+
         inject_javascript_to_webview(&self.webview, &self);
     }
 
-    fn new(app: &Application, directory: String, tags: Vec<String>) -> Self {
+    pub fn new(app: &Application, directory: String, tags: Vec<String>) -> Self {
         let window = create_window(app);
-        let webview_url = format!(
+        let webview = create_webview(format!(
             "http://localhost:8082/{}",
             Path::new(directory.as_str())
                 .join("index.html")
                 .to_str()
                 .unwrap()
                 .to_string()
-        );
-
-        let webview = create_webview(webview_url);
+        ));
         window.add(&webview);
         apply_layer_shell(&window);
+
+        // enable webkit inspector
+        let settings = WebViewExt::settings(&webview).unwrap();
+        settings.set_enable_developer_extras(true);
 
         Self {
             id: Uuid::new_v4().to_string(),
@@ -176,40 +322,32 @@ impl Widget {
             directory,
             window,
             webview,
+            metadata: WidgetMetadata {
+                monitor: None,
+                layer: None,
+                margins: None,
+                anchors: None,
+                size: None,
+                click_through: false,
+                exclusive: false,
+                keyboard_mode: None,
+            },
         }
     }
 }
 
-#[derive(Debug)]
-struct WidgetSet {
-    widgets: Vec<Widget>,
-}
-
-fn query_widgets(w: &Vec<Widget>, query: QueryArgs) -> Vec<&Widget> {
-    w.iter()
-        .filter(|w| {
-            (query.id.is_none() || query.id.as_ref().is_some_and(|e| w.id.contains(e)))
-                && (query.directory.is_none()
-                    || query
-                        .directory
-                        .as_ref()
-                        .is_some_and(|e| w.directory.contains(e)))
-                && (query.tags.is_none()
-                    || query
-                        .tags
-                        .as_ref()
-                        .is_some_and(|e| w.tags.iter().any(|t| e.contains(t))))
-        })
-        .collect()
-}
-
-async fn listen_unix_socket(app: Application) {
+async fn listen_unix_socket(application: Application) {
     if std::path::Path::new(SOCKET_PATH).exists() {
         std::fs::remove_file(SOCKET_PATH).expect("a daemon is already running");
     }
 
     let listener = UnixListener::bind(SOCKET_PATH).await.unwrap();
-    let mut config = WidgetSet { widgets: vec![] };
+
+    let mut config = AppState {
+        application,
+        widgets: vec![],
+    };
+    let mut handler = CommandHandler::new();
 
     loop {
         let stream = listener.accept().await;
@@ -220,106 +358,9 @@ async fn listen_unix_socket(app: Application) {
 
         let (mut stream, _) = stream.unwrap();
         let command = read_socket_response(&mut stream).await;
-        let command = serde_json::from_str::<Commands>(command.as_str()).unwrap();
+        let command = serde_json::from_str::<CliCommands>(command.as_str()).unwrap();
 
-        match command {
-            Commands::Kill => {
-                write_socket_message(&mut stream, "killed".to_string()).await;
-                app.quit();
-            }
-            Commands::Create {
-                directory,
-                tags,
-                metadata,
-            } => {
-                if metadata.monitor.is_none() || metadata.layer.is_none() {
-                    write_socket_message(
-                        &mut stream,
-                        "monitor and layer are required".to_string(),
-                    )
-                    .await;
-                    continue;
-                }
-
-                let id = {
-                    let widget = Widget::new(&app, directory, tags);
-                    widget.update(metadata);
-
-                    let id = widget.id.to_owned();
-                    config.widgets.push(widget);
-                    id
-                };
-                write_socket_message(&mut stream, id).await;
-            }
-            Commands::Update { query, metadata } => {
-                query_widgets(&config.widgets, query)
-                    .iter()
-                    .for_each(|w| w.update(metadata.to_owned()));
-                write_socket_message(&mut stream, "ok".to_string()).await;
-            }
-            Commands::List { query } => {
-                write_socket_message(
-                    &mut stream,
-                    format!("{:#?}", query_widgets(&config.widgets, query)),
-                )
-                .await;
-            }
-            Commands::Show { query } => {
-                query_widgets(&config.widgets, query)
-                    .iter()
-                    .for_each(|w| w.show());
-                write_socket_message(&mut stream, "ok".to_string()).await;
-            }
-            Commands::Hide { query } => {
-                query_widgets(&config.widgets, query)
-                    .iter()
-                    .for_each(|w| w.hide());
-                write_socket_message(&mut stream, "ok".to_string()).await;
-            }
-            Commands::Delete { query } => {
-                let ids = query_widgets(&config.widgets, query)
-                    .iter()
-                    .map(|e| e.id.to_owned())
-                    .collect::<Vec<String>>();
-
-                config.widgets.iter().for_each(|w| {
-                    if ids.contains(&w.id) {
-                        w.close();
-                    }
-                });
-                config.widgets.retain(|w| !ids.contains(&w.id));
-                write_socket_message(&mut stream, "ok".to_string()).await;
-            }
-            Commands::Reload { query } => {
-                query_widgets(&config.widgets, query)
-                    .iter()
-                    .for_each(|w| w.reload());
-                write_socket_message(&mut stream, "ok".to_string()).await;
-            }
-            Commands::Version => {
-                let display = &Display::default().expect("failed to get display");
-                let num_of_monitor = display.n_monitors();
-                let mut str = String::new();
-                for i in 0..num_of_monitor {
-                    let m = display.monitor(i).expect("failed to get monitor");
-                    str.push_str(
-                        format!(
-                            "- monitor {}: [{}] {}\n",
-                            i,
-                            m.manufacturer()
-                                .expect("failed to get model name of monitor"),
-                            m.model().expect("failed to get model name of monitor")
-                        )
-                        .as_str(),
-                    );
-                }
-                str.push_str("\nversion: 0.0.1");
-                write_socket_message(&mut stream, str).await;
-            }
-            _ => {
-                write_socket_message(&mut stream, "not implemented".to_string()).await;
-            }
-        }
+        write_socket_message(&mut stream, handler.handle(command, &mut config)).await;
     }
 }
 

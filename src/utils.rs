@@ -1,3 +1,5 @@
+use crate::cli::QueryArgs;
+use crate::widget::Widget;
 use async_std::io::{prelude::BufReadExt, BufReader, WriteExt};
 use async_std::os::unix::net::UnixStream;
 use std::env;
@@ -43,4 +45,18 @@ pub fn get_widget_dir_path() -> PathBuf {
     let xdg_config_path = env::var("XDG_CONFIG_HOME").unwrap_or(default_config_path);
 
     Path::new(xdg_config_path.as_str()).join("www")
+}
+
+pub fn widget_filter(w: &Widget, query: QueryArgs) -> bool {
+    (query.id.is_none() || query.id.as_ref().is_some_and(|e| w.id.contains(e)))
+        && (query.directory.is_none()
+            || query
+                .directory
+                .as_ref()
+                .is_some_and(|e| w.directory.contains(e)))
+        && (query.tags.is_none()
+            || query
+                .tags
+                .as_ref()
+                .is_some_and(|e| w.tags.iter().any(|t| e.contains(t))))
 }
