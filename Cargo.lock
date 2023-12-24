@@ -2376,7 +2376,6 @@ version = "0.1.0"
 dependencies = [
  "actix-files",
  "actix-web",
- "async-channel 2.1.1",
  "async-std",
  "clap",
  "daemonize",
