@@ -1,22 +1,26 @@
-use crate::cli::{AppState, WidgetDefaultSize, WidgetMargins, WidgetMetadataArgs};
-use crate::commands::handler::CommandHandler;
+use crate::app_state::AppState;
+use crate::cli::{CliCommand, WidgetDefaultSize, WidgetMargins, WidgetMetadataArgs};
 use crate::constants::SOCKET_PATH;
 use crate::utils::read_socket_response;
 use crate::{cli::CliCommands, utils::write_socket_message};
+use async_std::channel;
 use async_std::os::unix::net::UnixListener;
 use gdk::cairo::{RectangleInt, Region};
+use gdk::gio::{prelude::*, ApplicationFlags};
 use gdk::Display;
-use gio::{prelude::*, ApplicationFlags};
+use glib::{clone, SignalHandlerId};
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::Application;
 use gtk::ApplicationWindow;
 use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use std::path::Path;
+use serde::Serialize;
+use std::cell::RefCell;
+use std::rc::Rc;
 use uuid::Uuid;
-use webkit2gtk::{SettingsExt, WebView, WebViewExt};
+use webkit2gtk::{SettingsExt, UserContentManagerExt, WebInspectorExt, WebView, WebViewExt};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, Default)]
 pub struct WidgetMetadataAnchors {
     top: bool,
     right: bool,
@@ -24,7 +28,7 @@ pub struct WidgetMetadataAnchors {
     left: bool,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, Default)]
 pub struct WidgetMetadataMargins {
     pub top: i32,
     pub right: i32,
@@ -32,15 +36,16 @@ pub struct WidgetMetadataMargins {
     pub left: i32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Serialize, PartialEq)]
 pub struct WidgetMetadataSize {
     pub width: i32,
     pub height: i32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Serialize, PartialEq)]
 pub struct WidgetMetadata {
     pub monitor: Option<i32>,
+    #[serde(skip_serializing, skip_deserializing)]
     pub layer: Option<Layer>,
     pub anchors: Option<WidgetMetadataAnchors>,
     pub margins: Option<WidgetMetadataMargins>,
@@ -50,16 +55,21 @@ pub struct WidgetMetadata {
     pub keyboard_mode: Option<String>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Serialize)]
 pub struct Widget {
     pub id: String,
     pub tags: Vec<String>,
-    pub directory: String,
+    pub url: String,
 
     // gtk info
+    #[serde(skip_serializing)]
     pub window: ApplicationWindow,
-    pub webview: WebView,
+    #[serde(skip_serializing)]
+    webview: WebView,
     pub metadata: WidgetMetadata,
+
+    #[serde(skip_serializing)]
+    signal_handler: Option<SignalHandlerId>,
 }
 
 fn create_window(app: &Application) -> ApplicationWindow {
@@ -74,20 +84,21 @@ fn create_window(app: &Application) -> ApplicationWindow {
     window
 }
 
-fn inject_javascript_to_webview(webview: &WebView, data: &Widget) {
-    let template = r#"
-        window.www = {};
-        window.www.id = "{{id}}";
-    "#
-    .replace("{{id}}", data.id.as_str());
+fn inject_javascript_to_webview(widget: &Widget) -> SignalHandlerId {
+    let template = r#"window.www = {{www}};"#
+        .replace("{{www}}", serde_json::to_string(widget).unwrap().as_str());
 
-    webview.run_javascript(template.as_str(), gio::Cancellable::NONE, |e| {
-        if let Ok(r) = e {
-            println!("javascript injected: {:?}", r.to_value());
-        } else if let Err(e) = e {
-            println!("error: {:?}", e);
-        }
-    });
+    widget
+        .webview
+        .connect_load_changed(move |webview, load_event| {
+            if load_event == webkit2gtk::LoadEvent::Finished {
+                webview.run_javascript(
+                    template.as_str(),
+                    gdk::gio::Cancellable::NONE,
+                    |_| {},
+                );
+            }
+        })
 }
 
 fn create_webview(url: String) -> WebView {
@@ -103,9 +114,31 @@ fn apply_layer_shell(window: &ApplicationWindow) {
     window.init_layer_shell();
 }
 
+fn apply_javascript_api(webview: &WebView, api: async_std::channel::Sender<String>) {
+    let ucm = webview.user_content_manager().unwrap();
+
+    let (tx, rx) = channel::unbounded();
+
+    ucm.connect_script_message_received(Some("widget"), move |_, jsr| {
+        // get arguments
+        if let Some(args) = jsr.js_value() {
+            let _ = tx.send_blocking(args.to_string());
+        }
+    });
+
+    glib::spawn_future_local(clone!(@strong webview => async move {
+        while let Ok(ret) = rx.recv().await {
+            // parse it to CliCommands
+            let _ = api.send_blocking(ret);
+        }
+    }));
+
+    ucm.register_script_message_handler("widget");
+}
+
 fn update_monitor(window: &ApplicationWindow, monitor: i32) -> i32 {
     let display = &Display::default().expect("failed to get display");
-    let target_monitor = std::cmp::max(std::cmp::min(monitor, 0), display.n_monitors() - 1);
+    let target_monitor = std::cmp::min(std::cmp::max(monitor, 0), display.n_monitors() - 1);
     window.set_monitor(display.monitor(target_monitor).unwrap().as_ref());
     target_monitor
 }
@@ -125,45 +158,33 @@ fn update_layer(window: &ApplicationWindow, layer: String) -> Layer {
 }
 
 fn update_margins(window: &ApplicationWindow, margins: &WidgetMargins) -> WidgetMetadataMargins {
-    WidgetMetadataMargins {
-        top: if let Some(top) = margins.top {
-            window.set_layer_shell_margin(Edge::Top, top);
-            top
-        } else {
-            0
-        },
-        right: if let Some(right) = margins.right {
-            window.set_layer_shell_margin(Edge::Right, right);
-            right
-        } else {
-            0
-        },
-        bottom: if let Some(bottom) = margins.bottom {
-            window.set_layer_shell_margin(Edge::Bottom, bottom);
-            bottom
-        } else {
-            0
-        },
-        left: if let Some(left) = margins.left {
-            window.set_layer_shell_margin(Edge::Left, left);
-            left
-        } else {
-            0
-        },
+    let mut ret = WidgetMetadataMargins::default();
+
+    if let Some(top) = margins.top {
+        window.set_layer_shell_margin(Edge::Top, top);
+        ret.top = top;
     }
+
+    if let Some(right) = margins.right {
+        window.set_layer_shell_margin(Edge::Right, right);
+        ret.right = right;
+    }
+
+    if let Some(bottom) = margins.bottom {
+        window.set_layer_shell_margin(Edge::Bottom, bottom);
+        ret.bottom = bottom;
+    }
+
+    if let Some(left) = margins.left {
+        window.set_layer_shell_margin(Edge::Left, left);
+        ret.left = left;
+    }
+
+    ret
 }
 
 fn update_anchors(window: &ApplicationWindow, anchors: &Vec<String>) -> WidgetMetadataAnchors {
-    let mut ret = WidgetMetadataAnchors {
-        top: false,
-        right: false,
-        bottom: false,
-        left: false,
-    };
-
-    if anchors.is_empty() {
-        return ret;
-    }
+    let mut ret = WidgetMetadataAnchors::default();
 
     [Edge::Top, Edge::Right, Edge::Bottom, Edge::Left]
         .iter()
@@ -269,13 +290,17 @@ impl Widget {
         self.webview.reload();
     }
 
-    pub fn update(&mut self, metadata: WidgetMetadataArgs) {
-        println!("metadata: {:?}", metadata);
+    pub fn inspect(&self) {
+        let inspector = self.webview.inspector().unwrap();
+        inspector.show();
+    }
+
+    pub fn update(&mut self, metadata: &WidgetMetadataArgs) {
         if let Some(monitor) = metadata.monitor {
             self.metadata.monitor = Some(update_monitor(&self.window, monitor));
         }
-        if let Some(layer) = metadata.layer {
-            self.metadata.layer = Some(update_layer(&self.window, layer));
+        if let Some(layer) = metadata.layer.as_ref() {
+            self.metadata.layer = Some(update_layer(&self.window, layer.to_owned()));
         }
         if let Some(margins) = &metadata.margins {
             self.metadata.margins = Some(update_margins(&self.window, margins));
@@ -292,36 +317,42 @@ impl Widget {
         if let Some(exclusive) = metadata.exclusive {
             self.metadata.click_through = update_exclusive(&self.window, exclusive);
         }
-        if let Some(keyboard_mode) = metadata.keyboard_mode {
-            self.metadata.keyboard_mode = Some(update_keyboard_mode(&self.window, keyboard_mode));
+        if let Some(keyboard_mode) = metadata.keyboard_mode.as_ref() {
+            self.metadata.keyboard_mode =
+                Some(update_keyboard_mode(&self.window, keyboard_mode.to_owned()));
         }
-
-        inject_javascript_to_webview(&self.webview, &self);
+        if let Some(signal) = self.signal_handler.take() {
+            self.webview.disconnect(signal);
+        }
+        self.signal_handler = Some(inject_javascript_to_webview(&self));
     }
 
-    pub fn new(app: &Application, directory: String, tags: Vec<String>) -> Self {
+    pub fn new(
+        app: &Application,
+        url: String,
+        tags: Vec<String>,
+        api: async_std::channel::Sender<String>,
+    ) -> Self {
         let window = create_window(app);
-        let webview = create_webview(format!(
-            "http://localhost:8082/{}",
-            Path::new(directory.as_str())
-                .join("index.html")
-                .to_str()
-                .unwrap()
-                .to_string()
-        ));
+        let webview = create_webview(url.to_owned());
         window.add(&webview);
+        // init gtk layer shell
         apply_layer_shell(&window);
+        // inject ipc
+        apply_javascript_api(&webview, api);
 
         // enable webkit inspector
         let settings = WebViewExt::settings(&webview).unwrap();
         settings.set_enable_developer_extras(true);
 
-        Self {
+        // create widget
+        let widget = Self {
             id: Uuid::new_v4().to_string(),
             tags,
-            directory,
+            url,
             window,
             webview,
+            signal_handler: None,
             metadata: WidgetMetadata {
                 monitor: None,
                 layer: None,
@@ -332,35 +363,35 @@ impl Widget {
                 exclusive: false,
                 keyboard_mode: None,
             },
-        }
+        };
+
+        widget
     }
 }
 
-async fn listen_unix_socket(application: Application) {
+async fn listen_unix_socket(state: Rc<RefCell<AppState>>) {
     if std::path::Path::new(SOCKET_PATH).exists() {
         std::fs::remove_file(SOCKET_PATH).expect("a daemon is already running");
     }
 
     let listener = UnixListener::bind(SOCKET_PATH).await.unwrap();
 
-    let mut config = AppState {
-        application,
-        widgets: vec![],
-    };
-    let mut handler = CommandHandler::new();
-
-    loop {
-        let stream = listener.accept().await;
-
-        if stream.is_err() {
-            continue;
-        }
-
-        let (mut stream, _) = stream.unwrap();
+    while let Ok((mut stream, _)) = listener.accept().await {
         let command = read_socket_response(&mut stream).await;
         let command = serde_json::from_str::<CliCommands>(command.as_str()).unwrap();
 
-        write_socket_message(&mut stream, handler.handle(command, &mut config)).await;
+        let mut app_state = RefCell::borrow_mut(&state);
+        write_socket_message(&mut stream, command.mutate(&mut app_state)).await;
+    }
+}
+
+async fn listen_webkit_messages(
+    state: Rc<RefCell<AppState>>,
+    rx: async_std::channel::Receiver<String>,
+) {
+    while let Ok(message) = rx.recv().await {
+        let command = serde_json::from_str::<CliCommands>(message.as_str()).unwrap();
+        command.mutate(&mut RefCell::borrow_mut(&state));
     }
 }
 
@@ -368,17 +399,28 @@ pub fn start_widget_application() {
     gtk::init().unwrap();
 
     let app = Application::new(
-        Some("org.gnome.webkit6-rs.example"),
+        Some("com.johndoeantler.wayland-webkit-widget"),
         ApplicationFlags::FLAGS_NONE,
     );
 
-    app.connect_activate(move |app| {
+    app.connect_activate(move |application| {
         // dummy window for always awaking the glib main loop
-        let _ = ApplicationWindow::new(app);
-        let app = app.to_owned();
+        let _ = ApplicationWindow::new(application);
 
+        // ipc channel
+        let (tx, rx) = channel::unbounded();
+        let shared_state = Rc::new(RefCell::new(AppState::new(application.to_owned(), tx)));
+        let state_for_widget = shared_state.clone();
+        let state_for_ipc = shared_state.clone();
+
+        // listen the socket
         glib::spawn_future_local(async move {
-            listen_unix_socket(app).await;
+            listen_unix_socket(state_for_widget).await;
+        });
+
+        // handle any messages sent from javascript webkit api
+        glib::spawn_future_local(async move {
+            listen_webkit_messages(state_for_ipc, rx).await;
         });
     });
 

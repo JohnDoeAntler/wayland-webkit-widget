@@ -3,7 +3,8 @@ mod constants;
 mod http_server;
 mod utils;
 mod widget;
-mod commands;
+mod app_state;
+mod services;
 
 use std::fs::File;
 
@@ -49,21 +50,27 @@ fn main() {
             // 2. start http server
             let server_handle = start_web_server();
 
-            // 3. start gtk application, this will block the main thread
+            // 3. start gtk application, this will block the main thread, during starting it will
+            //    also listen to the unix socket for commands
             start_widget_application();
 
             // 4. kill http server handle after gtk application is closed
             rt::System::new().block_on(server_handle.stop(true));
         }
         _ => {
-            // run async statements with actix runtime
+            // run async statements with actix async runtime
             rt::System::new().block_on(async {
                 // else parse the command and send it to the daemon
                 let mut stream = UnixStream::connect(SOCKET_PATH).await.expect("daemon is not running");
                 let k = serde_json::to_string(&cli.command).unwrap().to_string();
 
-                write_socket_message(&mut stream, k).await;
-                println!("{}", read_socket_response(&mut stream).await);
+                if cli.json {
+                    write_socket_message(&mut stream, k.to_owned()).await;
+                    println!("{}\n================================\n{}", k, read_socket_response(&mut stream).await);
+                } else {
+                    write_socket_message(&mut stream, k).await;
+                    println!("{}", read_socket_response(&mut stream).await);
+                }
             });
         },
     }

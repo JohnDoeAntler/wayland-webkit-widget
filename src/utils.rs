@@ -47,16 +47,16 @@ pub fn get_widget_dir_path() -> PathBuf {
     Path::new(xdg_config_path.as_str()).join("www")
 }
 
-pub fn widget_filter(w: &Widget, query: QueryArgs) -> bool {
-    (query.id.is_none() || query.id.as_ref().is_some_and(|e| w.id.contains(e)))
-        && (query.directory.is_none()
+pub fn widget_filter(widget: &Widget, query: &QueryArgs) -> bool {
+    (query.id.is_none() || query.id.as_ref().is_some_and(|e| widget.id.contains(e)))
+        && (query.url.is_none()
             || query
-                .directory
+                .url
                 .as_ref()
-                .is_some_and(|e| w.directory.contains(e)))
+                .is_some_and(|e| widget.url.contains(e)))
         && (query.tags.is_none()
             || query
                 .tags
                 .as_ref()
-                .is_some_and(|e| w.tags.iter().any(|t| e.contains(t))))
+                .is_some_and(|e| widget.tags.iter().any(|t| e.contains(t))))
 }
