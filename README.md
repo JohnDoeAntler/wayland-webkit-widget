@@ -4,7 +4,7 @@ a widget system allows you using html, javascript and css to create something on
 
 a youtube demonstration video in below:
 
-[![Thumbnail](http://i3.ytimg.com/vi/TyJTUVT9ZWs/maxresdefault.jpg)](https://www.youtube.com/watch?v=TyJTUVT9ZWs)
+[![Thumbnail](http://i3.ytimg.com/vi/wezHWtsB1sk/maxresdefault.jpg)](https://www.youtube.com/watch?v=wezHWtsB1sk)
 
 # Initiatives
 
